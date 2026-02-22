@@ -4171,44 +4171,60 @@ export class Client extends GameShell {
 
     /** BootScape: player started walking — send the queued destination if any. */
     private bootOnWalkStart(): void {
-        if (this.bootPendingMoveType === -1 || this.bootPendingRouteLen === 0) return;
-        const len = this.bootPendingRouteLen;
-        const startIdx = len - 1;
-        const startX = this.bootPendingRouteX[startIdx];
-        const startZ = this.bootPendingRouteZ[startIdx];
-        const bufSize = len;
+        // Case 1: explicit queued route (tapped while standing still)
+        if (this.bootPendingMoveType !== -1 && this.bootPendingRouteLen > 0) {
+            const len = this.bootPendingRouteLen;
+            const startIdx = len - 1;
+            const startX = this.bootPendingRouteX[startIdx];
+            const startZ = this.bootPendingRouteZ[startIdx];
+            const bufSize = len;
 
-        if (this.bootPendingMoveType === 0) {
+            if (this.bootPendingMoveType === 0) {
+                this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
+                this.out.p1(bufSize + bufSize + 3);
+            } else if (this.bootPendingMoveType === 1) {
+                this.out.pIsaac(ClientProt.MOVE_MINIMAPCLICK);
+                this.out.p1(bufSize + bufSize + 3 + 14);
+            } else {
+                this.out.pIsaac(ClientProt.MOVE_OPCLICK);
+                this.out.p1(bufSize + bufSize + 3);
+            }
+            this.out.p1(this.bootPendingCtrl);
+            this.out.p2(startX + this.mapBuildBaseX);
+            this.out.p2(startZ + this.mapBuildBaseZ);
+            for (let i = 1; i < bufSize; i++) {
+                this.out.p1(this.bootPendingRouteX[startIdx - i] - startX);
+                this.out.p1(this.bootPendingRouteZ[startIdx - i] - startZ);
+            }
+            this.bootPendingMoveType = -1;
+            this.bootPendingRouteLen = 0;
+            return;
+        }
+
+        // Case 2: minimap flag still visible — resume toward it with a single-tile packet
+        // (server pathfinds from current position; no client-side route needed)
+        if (this.minimapFlagX !== 0 && this.localPlayer) {
+            const destX = this.minimapFlagX;
+            const destZ = this.minimapFlagZ;
             this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
-            this.out.p1(bufSize + bufSize + 3);
-        } else if (this.bootPendingMoveType === 1) {
-            this.out.pIsaac(ClientProt.MOVE_MINIMAPCLICK);
-            this.out.p1(bufSize + bufSize + 3 + 14);
-        } else {
-            this.out.pIsaac(ClientProt.MOVE_OPCLICK);
-            this.out.p1(bufSize + bufSize + 3);
+            this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
+            this.out.p1(0);
+            this.out.p2(destX + this.mapBuildBaseX);
+            this.out.p2(destZ + this.mapBuildBaseZ);
         }
-        this.out.p1(this.bootPendingCtrl);
-        this.out.p2(startX + this.mapBuildBaseX);
-        this.out.p2(startZ + this.mapBuildBaseZ);
-        for (let i = 1; i < bufSize; i++) {
-            this.out.p1(this.bootPendingRouteX[startIdx - i] - startX);
-            this.out.p1(this.bootPendingRouteZ[startIdx - i] - startZ);
-        }
-        this.bootPendingMoveType = -1;
-        this.bootPendingRouteLen = 0;
     }
 
-    /** BootScape: player stopped walking — halt character at current tile. */
+    /** BootScape: player stopped walking — halt character at current tile and save destination. */
     private bootOnWalkStop(): void {
         if (!this.localPlayer) return;
         const tileX = this.localPlayer.routeX[0];
         const tileZ = this.localPlayer.routeZ[0];
         this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
-        this.out.p1(5); // size: ctrl(1) + x(2) + z(2) = 5, no extra waypoints
-        this.out.p1(0); // ctrl key off
+        this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
+        this.out.p1(0);
         this.out.p2(tileX + this.mapBuildBaseX);
         this.out.p2(tileZ + this.mapBuildBaseZ);
+        // Clear explicit pending — minimap flag preserved so bootOnWalkStart can resume
         this.bootPendingMoveType = -1;
         this.bootPendingRouteLen = 0;
     }
