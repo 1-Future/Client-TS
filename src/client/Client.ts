@@ -1,6 +1,7 @@
 import { playWave, setWaveVolume } from '#3rdparty/audio.js';
 import { stopMidi, setMidiVolume, playMidi } from '#3rdparty/tinymidipcm.js';
 
+import { AccelerometerGate } from '#/client/AccelerometerGate.js';
 import { ClientCode } from '#/client/ClientCode.js';
 import GameShell from '#/client/GameShell.js';
 import InputTracking from '#/client/InputTracking.js';
@@ -1225,6 +1226,7 @@ export class Client extends GameShell {
             await this.titleScreenDraw();
         } else {
             this.gameDraw();
+            this.drawBootScapeHud();
         }
 
         if (this.isMobile) {
@@ -2025,6 +2027,7 @@ export class Client extends GameShell {
                 this.focus = true;
                 this.focusIn = true;
                 this.ingame = true;
+                AccelerometerGate.start(); // start on login (user gesture already happened)
                 this.out.pos = 0;
                 this.in.pos = 0;
                 this.ptype = -1;
@@ -4123,6 +4126,45 @@ export class Client extends GameShell {
         await sleep(5); // return a slice of time to the main loop so it can update the progress bar
     }
 
+    private drawBootScapeHud(): void {
+        const moving = AccelerometerGate.isMoving();
+        const enabled = AccelerometerGate.isEnabled;
+
+        canvas2d.save();
+        canvas2d.font = 'bold 13px monospace';
+        canvas2d.textAlign = 'left';
+
+        if (!this.isMobile && !enabled) {
+            // Desktop fallback — show banner at top of game viewport
+            canvas2d.fillStyle = 'rgba(0,0,0,0.72)';
+            canvas2d.fillRect(4, 4, 280, 28);
+            canvas2d.fillStyle = '#ffcc00';
+            canvas2d.fillText('BootScape: open on mobile to walk', 12, 22);
+        } else {
+            // Boot icon indicator — top-left corner of game viewport
+            const dot = moving ? '#44ff44' : '#888888';
+            const label = moving ? 'WALKING' : 'STAND STILL TO WALK';
+
+            // Background pill
+            canvas2d.fillStyle = 'rgba(0,0,0,0.65)';
+            canvas2d.beginPath();
+            canvas2d.roundRect(6, 6, moving ? 110 : 196, 26, 6);
+            canvas2d.fill();
+
+            // Status dot
+            canvas2d.fillStyle = dot;
+            canvas2d.beginPath();
+            canvas2d.arc(20, 19, 6, 0, Math.PI * 2);
+            canvas2d.fill();
+
+            // Boot emoji + label
+            canvas2d.fillStyle = moving ? '#44ff44' : '#aaaaaa';
+            canvas2d.fillText('\uD83D\uDC62 ' + label, 32, 23);
+        }
+
+        canvas2d.restore();
+    }
+
     // todo: order
     private gameDraw(): void {
         if (this.players === null) {
@@ -6060,6 +6102,10 @@ export class Client extends GameShell {
             }
 
             next = this.dirMap[CollisionMap.index(x, z)];
+        }
+
+        if (!AccelerometerGate.isMoving()) {
+            return false; // BootScape: block movement if player is not physically walking
         }
 
         if (length > 0) {
