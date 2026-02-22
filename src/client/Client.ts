@@ -4217,8 +4217,10 @@ export class Client extends GameShell {
     /** BootScape: player stopped walking — halt character at current tile and save destination. */
     private bootOnWalkStop(): void {
         if (!this.localPlayer) return;
-        const tileX = this.localPlayer.routeX[0];
-        const tileZ = this.localPlayer.routeZ[0];
+        // Use pixel position >> 7 = local tile coord. routeX[0] is the entity's *next waypoint*
+        // which can be 0 or stale when the route is finished, causing the player to teleport.
+        const tileX = this.localPlayer.x >> 7;
+        const tileZ = this.localPlayer.z >> 7;
         this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
         this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
         this.out.p1(0);
