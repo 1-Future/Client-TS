@@ -4209,18 +4209,11 @@ export class Client extends GameShell {
         }
     }
 
-    /** BootScape: player stopped walking — halt character at current tile. */
+    /** BootScape: player stopped walking — block new inputs, let character finish its current route. */
     private bootOnWalkStop(): void {
-        if (!this.localPlayer) return;
-        // Use pixel position >> 7 = local tile coord.
-        const tileX = this.localPlayer.x >> 7;
-        const tileZ = this.localPlayer.z >> 7;
-        this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
-        this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
-        this.out.p1(0);
-        this.out.p2(tileX + this.mapBuildBaseX);
-        this.out.p2(tileZ + this.mapBuildBaseZ);
-        // Clear pending queued tap — minimap flag preserved so resume works on walk-start
+        // No halt packet — halting to client-rendered position causes server rubber-band (teleport)
+        // because the server is 1-3 ticks ahead of what the client renders.
+        // The movement gate already blocks new taps; the character naturally reaches its destination.
         this.bootPendingMoveType = -1;
         this.bootPendingRouteLen = 0;
     }
