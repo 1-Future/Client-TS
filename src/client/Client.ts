@@ -4171,7 +4171,7 @@ export class Client extends GameShell {
 
     /** BootScape: player started walking — send the queued destination if any. */
     private bootOnWalkStart(): void {
-        // Case 1: explicit queued route (tapped while standing still)
+        // Send queued route if the player tapped while standing still
         if (this.bootPendingMoveType !== -1 && this.bootPendingRouteLen > 0) {
             const len = this.bootPendingRouteLen;
             const startIdx = len - 1;
@@ -4198,27 +4198,14 @@ export class Client extends GameShell {
             }
             this.bootPendingMoveType = -1;
             this.bootPendingRouteLen = 0;
-            return;
         }
-
-        // Case 2: minimap flag still visible — resume toward it with a single-tile packet
-        // (server pathfinds from current position; no client-side route needed)
-        if (this.minimapFlagX !== 0 && this.localPlayer) {
-            const destX = this.minimapFlagX;
-            const destZ = this.minimapFlagZ;
-            this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
-            this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
-            this.out.p1(0);
-            this.out.p2(destX + this.mapBuildBaseX);
-            this.out.p2(destZ + this.mapBuildBaseZ);
-        }
+        // No queued route — movement inputs are now unblocked, player taps next destination
     }
 
-    /** BootScape: player stopped walking — halt character at current tile and save destination. */
+    /** BootScape: player stopped walking — halt character at current tile. */
     private bootOnWalkStop(): void {
         if (!this.localPlayer) return;
-        // Use pixel position >> 7 = local tile coord. routeX[0] is the entity's *next waypoint*
-        // which can be 0 or stale when the route is finished, causing the player to teleport.
+        // Use pixel position >> 7 = local tile coord.
         const tileX = this.localPlayer.x >> 7;
         const tileZ = this.localPlayer.z >> 7;
         this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
@@ -4226,9 +4213,11 @@ export class Client extends GameShell {
         this.out.p1(0);
         this.out.p2(tileX + this.mapBuildBaseX);
         this.out.p2(tileZ + this.mapBuildBaseZ);
-        // Clear explicit pending — minimap flag preserved so bootOnWalkStart can resume
+        // Clear pending route and minimap flag — player taps next destination after resuming walk
         this.bootPendingMoveType = -1;
         this.bootPendingRouteLen = 0;
+        this.minimapFlagX = 0;
+        this.minimapFlagZ = 0;
     }
 
     private drawBootScapeHud(): void {
