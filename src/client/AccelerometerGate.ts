@@ -4,8 +4,11 @@
 // so desktop users are not blocked (they see the "use mobile" message instead).
 // Fires onStart/onStop callbacks on transitions for smart queue + halt logic.
 
-const WINDOW_SIZE = 20; // ~2 seconds at 10 Hz
-const MOVEMENT_THRESHOLD = 1.5; // m/s² variation required to count as moving
+const WINDOW_SIZE = 20;         // ~2 seconds at 10 Hz
+const MOVEMENT_THRESHOLD = 4.0; // m/s² — high enough to ignore hand tremor/micro-vibration
+const START_DEBOUNCE = 6;       // consecutive above-threshold samples before onStart fires (~0.6s)
+const STOP_DEBOUNCE = 20;       // consecutive below-threshold samples before onStop fires (~2s)
+                                // asymmetric: start fast, stop slow — brief pauses don't halt
 
 class AccelerometerGateImpl {
     private samples: number[] = [];
@@ -14,6 +17,8 @@ class AccelerometerGateImpl {
     private _started = false;
     private _onStart: (() => void) | null = null;
     private _onStop: (() => void) | null = null;
+    private _aboveCount = 0; // consecutive samples above threshold
+    private _belowCount = 0; // consecutive samples below threshold
 
     /** True once the accelerometer has been started and permissions granted. */
     get isEnabled(): boolean {
@@ -88,13 +93,27 @@ class AccelerometerGateImpl {
         const magnitude = Math.sqrt(x * x + y * y + z * z);
         this.samples.push(magnitude);
         if (this.samples.length > WINDOW_SIZE) this.samples.shift();
-        if (this.samples.length >= 5) {
-            const max = Math.max(...this.samples);
-            const min = Math.min(...this.samples);
-            const wasMoving = this._moving;
-            this._moving = max - min > MOVEMENT_THRESHOLD;
-            if (this._moving && !wasMoving) this._onStart?.();
-            if (!this._moving && wasMoving) this._onStop?.();
+        if (this.samples.length < 5) return;
+
+        const max = Math.max(...this.samples);
+        const min = Math.min(...this.samples);
+        const variance = max - min;
+        const rawMoving = variance > MOVEMENT_THRESHOLD;
+
+        if (rawMoving) {
+            this._aboveCount++;
+            this._belowCount = 0;
+        } else {
+            this._belowCount++;
+            this._aboveCount = 0;
+        }
+
+        if (!this._moving && this._aboveCount >= START_DEBOUNCE) {
+            this._moving = true;
+            this._onStart?.();
+        } else if (this._moving && this._belowCount >= STOP_DEBOUNCE) {
+            this._moving = false;
+            this._onStop?.();
         }
     }
 }
