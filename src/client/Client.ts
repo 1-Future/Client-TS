@@ -2037,6 +2037,7 @@ export class Client extends GameShell {
                 AccelerometerGate.start(); // start on login (user gesture already happened)
                 AccelerometerGate.onStart(() => this.bootOnWalkStart());
                 AccelerometerGate.onStop(() => this.bootOnWalkStop());
+                if (this.isMobile) this.bootAddKeyboardButton();
                 this.out.pos = 0;
                 this.in.pos = 0;
                 this.ptype = -1;
@@ -4133,6 +4134,39 @@ export class Client extends GameShell {
         }
 
         await sleep(5); // return a slice of time to the main loop so it can update the progress bar
+    }
+
+    /** BootScape: inject a floating keyboard toggle button for mobile. */
+    private bootAddKeyboardButton(): void {
+        if (document.getElementById('boot-kbd-btn')) return;
+        const btn = document.createElement('button');
+        btn.id = 'boot-kbd-btn';
+        btn.textContent = '⌨️';
+        btn.setAttribute('style', [
+            'position:fixed',
+            'bottom:16px',
+            'right:16px',
+            'z-index:9999',
+            'width:52px',
+            'height:52px',
+            'border-radius:50%',
+            'border:none',
+            'background:rgba(0,0,0,0.65)',
+            'color:#fff',
+            'font-size:24px',
+            'cursor:pointer',
+            'touch-action:manipulation',
+            '-webkit-tap-highlight-color:transparent',
+        ].join(';'));
+        btn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (MobileKeyboard.isDisplayed()) {
+                MobileKeyboard.hide();
+            } else {
+                MobileKeyboard.show(17, 440, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
+            }
+        });
+        document.body.appendChild(btn);
     }
 
     /** BootScape: player started walking — send the queued destination if any. */
