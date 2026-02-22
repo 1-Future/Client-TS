@@ -189,6 +189,13 @@ export class Client extends GameShell {
     private routeX: Int32Array = new Int32Array(4000);
     private routeZ: Int32Array = new Int32Array(4000);
 
+    // BootScape: queued move while player is standing still
+    private bootPendingMoveType: number = -1;
+    private bootPendingRouteX: Int32Array = new Int32Array(26);
+    private bootPendingRouteZ: Int32Array = new Int32Array(26);
+    private bootPendingRouteLen: number = 0;
+    private bootPendingCtrl: number = 0;
+
     private macroCameraX: number = 0;
     private macroCameraXModifier: number = 2;
     private macroCameraZ: number = 0;
@@ -2028,6 +2035,8 @@ export class Client extends GameShell {
                 this.focusIn = true;
                 this.ingame = true;
                 AccelerometerGate.start(); // start on login (user gesture already happened)
+                AccelerometerGate.onStart(() => this.bootOnWalkStart());
+                AccelerometerGate.onStop(() => this.bootOnWalkStop());
                 this.out.pos = 0;
                 this.in.pos = 0;
                 this.ptype = -1;
@@ -4126,6 +4135,50 @@ export class Client extends GameShell {
         await sleep(5); // return a slice of time to the main loop so it can update the progress bar
     }
 
+    /** BootScape: player started walking — send the queued destination if any. */
+    private bootOnWalkStart(): void {
+        if (this.bootPendingMoveType === -1 || this.bootPendingRouteLen === 0) return;
+        const len = this.bootPendingRouteLen;
+        const startIdx = len - 1;
+        const startX = this.bootPendingRouteX[startIdx];
+        const startZ = this.bootPendingRouteZ[startIdx];
+        const bufSize = len;
+
+        if (this.bootPendingMoveType === 0) {
+            this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
+            this.out.p1(bufSize + bufSize + 3);
+        } else if (this.bootPendingMoveType === 1) {
+            this.out.pIsaac(ClientProt.MOVE_MINIMAPCLICK);
+            this.out.p1(bufSize + bufSize + 3 + 14);
+        } else {
+            this.out.pIsaac(ClientProt.MOVE_OPCLICK);
+            this.out.p1(bufSize + bufSize + 3);
+        }
+        this.out.p1(this.bootPendingCtrl);
+        this.out.p2(startX + this.mapBuildBaseX);
+        this.out.p2(startZ + this.mapBuildBaseZ);
+        for (let i = 1; i < bufSize; i++) {
+            this.out.p1(this.bootPendingRouteX[startIdx - i] - startX);
+            this.out.p1(this.bootPendingRouteZ[startIdx - i] - startZ);
+        }
+        this.bootPendingMoveType = -1;
+        this.bootPendingRouteLen = 0;
+    }
+
+    /** BootScape: player stopped walking — halt character at current tile. */
+    private bootOnWalkStop(): void {
+        if (!this.localPlayer) return;
+        const tileX = this.localPlayer.routeX[0];
+        const tileZ = this.localPlayer.routeZ[0];
+        this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
+        this.out.p1(5); // size: ctrl(1) + x(2) + z(2) = 5, no extra waypoints
+        this.out.p1(0); // ctrl key off
+        this.out.p2(tileX + this.mapBuildBaseX);
+        this.out.p2(tileZ + this.mapBuildBaseZ);
+        this.bootPendingMoveType = -1;
+        this.bootPendingRouteLen = 0;
+    }
+
     private drawBootScapeHud(): void {
         const moving = AccelerometerGate.isMoving();
         const enabled = AccelerometerGate.isEnabled;
@@ -6105,7 +6158,17 @@ export class Client extends GameShell {
         }
 
         if (!AccelerometerGate.isMoving()) {
-            return false; // BootScape: block movement if player is not physically walking
+            // BootScape: queue the destination — send it when the player starts walking
+            if (length > 0) {
+                this.bootPendingMoveType = type;
+                this.bootPendingRouteLen = Math.min(length, 25);
+                this.bootPendingCtrl = this.keyHeld[5] === 1 ? 1 : 0;
+                for (let i = 0; i < this.bootPendingRouteLen; i++) {
+                    this.bootPendingRouteX[i] = this.routeX[i];
+                    this.bootPendingRouteZ[i] = this.routeZ[i];
+                }
+            }
+            return false;
         }
 
         if (length > 0) {

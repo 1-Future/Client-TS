@@ -2,6 +2,7 @@
 // Binary: isMoving() returns true if the player is physically walking.
 // If the accelerometer is unavailable (desktop), isMoving() always returns true
 // so desktop users are not blocked (they see the "use mobile" message instead).
+// Fires onStart/onStop callbacks on transitions for smart queue + halt logic.
 
 const WINDOW_SIZE = 20; // ~2 seconds at 10 Hz
 const MOVEMENT_THRESHOLD = 1.5; // m/s² variation required to count as moving
@@ -11,6 +12,8 @@ class AccelerometerGateImpl {
     private _moving = false;
     private _enabled = false;
     private _started = false;
+    private _onStart: (() => void) | null = null;
+    private _onStop: (() => void) | null = null;
 
     /** True once the accelerometer has been started and permissions granted. */
     get isEnabled(): boolean {
@@ -19,12 +22,22 @@ class AccelerometerGateImpl {
 
     /**
      * Returns true if the player is allowed to move.
-     * - Not enabled (desktop/no sensor): always true — gating handled by UI message instead.
+     * - Not enabled (desktop/no sensor): always true.
      * - Enabled: true only when walking motion is detected.
      */
     isMoving(): boolean {
         if (!this._enabled) return true;
         return this._moving;
+    }
+
+    /** Called once when transitioning from still → walking. */
+    onStart(callback: () => void): void {
+        this._onStart = callback;
+    }
+
+    /** Called once when transitioning from walking → still. */
+    onStop(callback: () => void): void {
+        this._onStop = callback;
     }
 
     /**
@@ -78,7 +91,10 @@ class AccelerometerGateImpl {
         if (this.samples.length >= 5) {
             const max = Math.max(...this.samples);
             const min = Math.min(...this.samples);
+            const wasMoving = this._moving;
             this._moving = max - min > MOVEMENT_THRESHOLD;
+            if (this._moving && !wasMoving) this._onStart?.();
+            if (!this._moving && wasMoving) this._onStop?.();
         }
     }
 }
