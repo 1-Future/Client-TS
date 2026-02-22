@@ -4209,11 +4209,12 @@ export class Client extends GameShell {
         }
     }
 
-    /** BootScape: player stopped walking — block new inputs, let character finish its current route. */
+    /** BootScape: player stopped walking — halt at server-authoritative tile. */
     private bootOnWalkStop(): void {
-        // No halt packet — halting to client-rendered position causes server rubber-band (teleport)
-        // because the server is 1-3 ticks ahead of what the client renders.
-        // The movement gate already blocks new taps; the character naturally reaches its destination.
+        // Send BOOT_HALT — zero-byte opcode, no coordinates.
+        // The server calls clearWaypoints() at its own authoritative tile position,
+        // so there is no client/server coordinate mismatch and no rubber-band.
+        this.out.pIsaac(ClientProt.BOOT_HALT);
         this.bootPendingMoveType = -1;
         this.bootPendingRouteLen = 0;
     }

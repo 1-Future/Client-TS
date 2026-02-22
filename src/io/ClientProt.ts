@@ -93,4 +93,6 @@ export const enum ClientProt {
     CLIENT_CHEAT = 86, // index: 253 - NXT naming
     MESSAGE_PUBLIC = 83, // index: 254 - NXT naming
     MOVE_GAMECLICK = 6, // index: 255 - NXT naming
+
+    BOOT_HALT = 250, // BootScape: halt movement at server-authoritative tile (zero-byte payload)
 };
