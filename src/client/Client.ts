@@ -4199,7 +4199,14 @@ export class Client extends GameShell {
             this.bootPendingMoveType = -1;
             this.bootPendingRouteLen = 0;
         }
-        // No queued route — movement inputs are now unblocked, player taps next destination
+        // No queued tap — resume to original destination if still visible
+        if (this.minimapFlagX !== 0 && this.localPlayer) {
+            this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
+            this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
+            this.out.p1(0);
+            this.out.p2(this.minimapFlagX + this.mapBuildBaseX);
+            this.out.p2(this.minimapFlagZ + this.mapBuildBaseZ);
+        }
     }
 
     /** BootScape: player stopped walking — halt character at current tile. */
@@ -4213,11 +4220,9 @@ export class Client extends GameShell {
         this.out.p1(0);
         this.out.p2(tileX + this.mapBuildBaseX);
         this.out.p2(tileZ + this.mapBuildBaseZ);
-        // Clear pending route and minimap flag — player taps next destination after resuming walk
+        // Clear pending queued tap — minimap flag preserved so resume works on walk-start
         this.bootPendingMoveType = -1;
         this.bootPendingRouteLen = 0;
-        this.minimapFlagX = 0;
-        this.minimapFlagZ = 0;
     }
 
     private drawBootScapeHud(): void {
