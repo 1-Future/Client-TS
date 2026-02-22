@@ -3,12 +3,16 @@
 // If the accelerometer is unavailable (desktop), isMoving() always returns true
 // so desktop users are not blocked (they see the "use mobile" message instead).
 // Fires onStart/onStop callbacks on transitions for smart queue + halt logic.
+//
+// Rate throttling: Android DeviceMotionEvent fires at 50-60 Hz, not 10 Hz.
+// All counts below assume 10 Hz — enforced by SAMPLE_INTERVAL_MS.
 
+const SAMPLE_INTERVAL_MS = 100; // enforce 10 Hz regardless of sensor fire rate
 const WINDOW_SIZE = 20;         // ~2 seconds at 10 Hz
 const MOVEMENT_THRESHOLD = 4.0; // m/s² — high enough to ignore hand tremor/micro-vibration
 const START_DEBOUNCE = 6;       // consecutive above-threshold samples before onStart fires (~0.6s)
-const STOP_DEBOUNCE = 20;       // consecutive below-threshold samples before onStop fires (~2s)
-                                // asymmetric: start fast, stop slow — brief pauses don't halt
+const STOP_DEBOUNCE = 30;       // consecutive below-threshold samples before onStop fires (~3s)
+                                // asymmetric: start fast, stop slow — stride dips don't halt
 
 class AccelerometerGateImpl {
     private samples: number[] = [];
@@ -19,6 +23,7 @@ class AccelerometerGateImpl {
     private _onStop: (() => void) | null = null;
     private _aboveCount = 0; // consecutive samples above threshold
     private _belowCount = 0; // consecutive samples below threshold
+    private _lastSampleTime = 0; // for rate throttling
 
     /** True once the accelerometer has been started and permissions granted. */
     get isEnabled(): boolean {
@@ -90,6 +95,12 @@ class AccelerometerGateImpl {
     }
 
     private onSample(x: number, y: number, z: number): void {
+        // Throttle to 10 Hz — DeviceMotionEvent on Android fires at 50-60 Hz.
+        // Without this, STOP_DEBOUNCE=30 would only be ~500ms at 60 Hz instead of 3s.
+        const now = Date.now();
+        if (now - this._lastSampleTime < SAMPLE_INTERVAL_MS) return;
+        this._lastSampleTime = now;
+
         const magnitude = Math.sqrt(x * x + y * y + z * z);
         this.samples.push(magnitude);
         if (this.samples.length > WINDOW_SIZE) this.samples.shift();
