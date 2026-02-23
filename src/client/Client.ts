@@ -189,13 +189,6 @@ export class Client extends GameShell {
     private routeX: Int32Array = new Int32Array(4000);
     private routeZ: Int32Array = new Int32Array(4000);
 
-    // BootScape: queued move while player is standing still
-    private bootPendingMoveType: number = -1;
-    private bootPendingRouteX: Int32Array = new Int32Array(26);
-    private bootPendingRouteZ: Int32Array = new Int32Array(26);
-    private bootPendingRouteLen: number = 0;
-    private bootPendingCtrl: number = 0;
-
     private macroCameraX: number = 0;
     private macroCameraXModifier: number = 2;
     private macroCameraZ: number = 0;
@@ -507,6 +500,17 @@ export class Client extends GameShell {
     private lastWaveLength: number = 0;
     private lastWaveStartTime: number = 0;
 
+    // BootScape: UI toggle flags
+    bootHideUi: boolean = false;
+    bootExpandedViewport: boolean = false;
+    bootMapOpen: boolean = false;
+    private bootOriginalViewportW: number = 512;
+    private bootOriginalViewportH: number = 334;
+    private bootMapImageData: ImageData | null = null;
+    private bootMapTmpCanvas: HTMLCanvasElement | null = null;
+    private bootMapTmpCtx: CanvasRenderingContext2D | null = null;
+    private bootMapIconCache: Map<Pix32, HTMLCanvasElement> = new Map();
+
     private cinemaCam: boolean = false;
     private camShake: boolean[] = new TypedArray1d(5, false);
     private camShakeAxis: Int32Array = new Int32Array(5);
@@ -599,6 +603,56 @@ export class Client extends GameShell {
         }
 
         this.run();
+
+        // BootScape: expose UI toggles to the page
+        (window as any)._bootToggleExpand = (): void => {
+            this.bootExpandedViewport = !this.bootExpandedViewport;
+            if (this.bootExpandedViewport) {
+                this.bootHideUi = true;
+                // Resize canvas to fill window — no black bars
+                this.resize(window.innerWidth, window.innerHeight);
+                const w = this.sWid;
+                const h = this.sHei;
+                this.areaViewport = new PixMap(w, h);
+                Pix3D.setClipping(w, h);
+                this.viewportScanline = Pix3D.scanline;
+                const distance: Int32Array = new Int32Array(9);
+                for (let x: number = 0; x < 9; x++) {
+                    const angle: number = x * 32 + 128 + 15;
+                    const offset: number = angle * 3 + 600;
+                    const sin: number = Pix3D.sinTable[angle];
+                    distance[x] = (offset * sin) >> 16;
+                }
+                World.init(distance, 500, 800, w, h);
+                // CSS: fill window exactly
+                const c = document.getElementById('canvas') as HTMLCanvasElement;
+                c.style.width = '100vw';
+                c.style.height = '100vh';
+            } else {
+                this.bootHideUi = false;
+                // Restore original canvas
+                this.resize(765, 503);
+                this.areaViewport = new PixMap(512, 334);
+                Pix3D.setClipping(512, 334);
+                this.viewportScanline = Pix3D.scanline;
+                const distance: Int32Array = new Int32Array(9);
+                for (let x: number = 0; x < 9; x++) {
+                    const angle: number = x * 32 + 128 + 15;
+                    const offset: number = angle * 3 + 600;
+                    const sin: number = Pix3D.sinTable[angle];
+                    distance[x] = (offset * sin) >> 16;
+                }
+                World.init(distance, 500, 800, 512, 334);
+                // Restore CSS auto-sizing
+                const c = document.getElementById('canvas') as HTMLCanvasElement;
+                (window as any).setSize();
+            }
+            this.redrawFrame = true;
+        };
+
+        (window as any)._bootToggleMap = (): void => {
+            this.bootMapOpen = !this.bootMapOpen;
+        };
     }
 
     static setLowMem(): void {
@@ -831,16 +885,17 @@ export class Client extends GameShell {
             await this.messageBox('Preloading cache', 62);
             await this.onDemand.prefetchAll();
 
-            if (!Client.lowMem) {
-                this.midiSong = 0; // scape_main
-                this.midiFading = false;
-                this.onDemand.request(2, this.midiSong);
-
-                while (this.onDemand.remaining() > 0) {
-                    await this.onDemandLoop();
-                    await sleep(100);
-                }
-            }
+            // BootScape: login music disabled
+            // if (!Client.lowMem) {
+            //     this.midiSong = 0; // scape_main
+            //     this.midiFading = false;
+            //     this.onDemand.request(2, this.midiSong);
+            //
+            //     while (this.onDemand.remaining() > 0) {
+            //         await this.onDemandLoop();
+            //         await sleep(100);
+            //     }
+            // }
 
             await this.messageBox('Requesting animations', 65);
 
@@ -1233,6 +1288,9 @@ export class Client extends GameShell {
             await this.titleScreenDraw();
         } else {
             this.gameDraw();
+            if (this.bootMapOpen) {
+                this.bootDrawMap();
+            }
             this.drawBootScapeHud();
         }
 
@@ -2414,6 +2472,9 @@ export class Client extends GameShell {
             this.out.p4((delta << 20) + (button << 19) + pos);
         }
 
+        // BootScape: handle map overlay clicks before any other input handlers consume the click
+        this.bootMapHandleClick();
+
         if (this.sendCameraDelay > 0) {
             this.sendCameraDelay--;
         }
@@ -2782,11 +2843,15 @@ export class Client extends GameShell {
         this.lastOverComId = 0;
 
         // the main viewport area
-        if (this.mouseX > 4 && this.mouseY > 4 && this.mouseX < 516 && this.mouseY < 338) {
+        const vpL = this.bootExpandedViewport ? 0 : 4;
+        const vpT = this.bootExpandedViewport ? 0 : 4;
+        const vpR = this.bootExpandedViewport ? this.sWid : 516;
+        const vpB = this.bootExpandedViewport ? this.sHei : 338;
+        if (this.mouseX > vpL && this.mouseY > vpT && this.mouseX < vpR && this.mouseY < vpB) {
             if (this.mainModalId === -1) {
                 this.addWorldOptions();
             } else {
-                this.addComponentOptions(IfType.list[this.mainModalId], this.mouseX, this.mouseY, 4, 4, 0);
+                this.addComponentOptions(IfType.list[this.mainModalId], this.mouseX, this.mouseY, vpL, vpT, 0);
             }
         }
 
@@ -2797,7 +2862,7 @@ export class Client extends GameShell {
         this.lastOverComId = 0;
 
         // the sidebar/tabs area
-        if (this.mouseX > 553 && this.mouseY > 205 && this.mouseX < 743 && this.mouseY < 466) {
+        if (!this.bootHideUi && this.mouseX > 553 && this.mouseY > 205 && this.mouseX < 743 && this.mouseY < 466) {
             if (this.sideModalId !== -1) {
                 this.addComponentOptions(IfType.list[this.sideModalId], this.mouseX, this.mouseY, 553, 205, 0);
             } else if (this.sideOverlayId[this.sideTab] !== -1) {
@@ -2813,7 +2878,7 @@ export class Client extends GameShell {
         this.lastOverComId = 0;
 
         // the chatbox area
-        if (this.mouseX > 17 && this.mouseY > 357 && this.mouseX < 426 && this.mouseY < 453) {
+        if (!this.bootHideUi && this.mouseX > 17 && this.mouseY > 357 && this.mouseX < 426 && this.mouseY < 453) {
             if (this.chatComId !== -1) {
                 this.addComponentOptions(IfType.list[this.chatComId], this.mouseX, this.mouseY, 17, 357, 0);
             } else if (this.mouseY < 434) {
@@ -3001,7 +3066,7 @@ export class Client extends GameShell {
     }
 
     minimapLoop(): void {
-        if (this.mouseClickButton !== 1 || !this.localPlayer) {
+        if (this.bootHideUi || this.mouseClickButton !== 1 || !this.localPlayer) {
             return;
         }
 
@@ -3046,7 +3111,7 @@ export class Client extends GameShell {
 
     // todo: order
     private tabLoop(): void {
-        if (this.mouseClickButton !== 1) {
+        if (this.bootHideUi || this.mouseClickButton !== 1) {
             return;
         }
 
@@ -4169,54 +4234,214 @@ export class Client extends GameShell {
         document.body.appendChild(btn);
     }
 
-    /** BootScape: player started walking — send the queued destination if any. */
-    private bootOnWalkStart(): void {
-        // Send queued route if the player tapped while standing still
-        if (this.bootPendingMoveType !== -1 && this.bootPendingRouteLen > 0) {
-            const len = this.bootPendingRouteLen;
-            const startIdx = len - 1;
-            const startX = this.bootPendingRouteX[startIdx];
-            const startZ = this.bootPendingRouteZ[startIdx];
-            const bufSize = len;
+    /** BootScape: cache current minimap chunk for the world map overlay. */
+    /** BootScape: pre-render entire world map from cache data during loading. */
+    /** BootScape: draw fullscreen minimap overlay. */
+    private bootDrawMap(): void {
+        if (!this.localPlayer || !this.minimap) return;
 
-            if (this.bootPendingMoveType === 0) {
-                this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
-                this.out.p1(bufSize + bufSize + 3);
-            } else if (this.bootPendingMoveType === 1) {
-                this.out.pIsaac(ClientProt.MOVE_MINIMAPCLICK);
-                this.out.p1(bufSize + bufSize + 3 + 14);
-            } else {
-                this.out.pIsaac(ClientProt.MOVE_OPCLICK);
-                this.out.p1(bufSize + bufSize + 3);
-            }
-            this.out.p1(this.bootPendingCtrl);
-            this.out.p2(startX + this.mapBuildBaseX);
-            this.out.p2(startZ + this.mapBuildBaseZ);
-            for (let i = 1; i < bufSize; i++) {
-                this.out.p1(this.bootPendingRouteX[startIdx - i] - startX);
-                this.out.p1(this.bootPendingRouteZ[startIdx - i] - startZ);
-            }
-            this.bootPendingMoveType = -1;
-            this.bootPendingRouteLen = 0;
+        const cw = canvas.width;
+        const ch = canvas.height;
+
+        // Build ImageData from the 512x512 minimap Pix32
+        if (!this.bootMapImageData || this.bootMapImageData.width !== 512) {
+            this.bootMapImageData = new ImageData(512, 512);
         }
-        // No queued tap — resume to original destination if still visible
-        if (this.minimapFlagX !== 0 && this.localPlayer) {
-            this.out.pIsaac(ClientProt.MOVE_GAMECLICK);
-            this.out.p1(5); // ctrl(1) + x(2) + z(2), no extra waypoints
-            this.out.p1(0);
-            this.out.p2(this.minimapFlagX + this.mapBuildBaseX);
-            this.out.p2(this.minimapFlagZ + this.mapBuildBaseZ);
+        const minimapData = this.minimap.data;
+        const imgData = this.bootMapImageData.data;
+        for (let i = 0; i < 512 * 512; i++) {
+            const rgb = minimapData[i];
+            imgData[i * 4] = (rgb >> 16) & 0xff;
+            imgData[i * 4 + 1] = (rgb >> 8) & 0xff;
+            imgData[i * 4 + 2] = rgb & 0xff;
+            imgData[i * 4 + 3] = 255;
+        }
+
+        // Draw black background
+        canvas2d.fillStyle = 'black';
+        canvas2d.fillRect(0, 0, cw, ch);
+
+        // Scale minimap to fit screen
+        const scale = Math.min(cw / 512, ch / 512);
+        const drawW = 512 * scale;
+        const drawH = 512 * scale;
+        const drawX = (cw - drawW) / 2;
+        const drawY = (ch - drawH) / 2;
+
+        // Draw minimap via cached temp canvas (for scaling)
+        if (!this.bootMapTmpCanvas) {
+            this.bootMapTmpCanvas = document.createElement('canvas');
+            this.bootMapTmpCanvas.width = 512;
+            this.bootMapTmpCanvas.height = 512;
+            this.bootMapTmpCtx = this.bootMapTmpCanvas.getContext('2d')!;
+        }
+        this.bootMapTmpCtx!.putImageData(this.bootMapImageData, 0, 0);
+
+        canvas2d.imageSmoothingEnabled = false;
+        canvas2d.drawImage(this.bootMapTmpCanvas!, drawX, drawY, drawW, drawH);
+
+        // Helper: convert fine coords to screen position
+        const toScreenX = (fineX: number): number => drawX + ((fineX / 32) + 48) * scale;
+        const toScreenY = (fineZ: number): number => drawY + (464 - (fineZ / 32)) * scale;
+        const dotSize = Math.max(3, 6 * scale / 2);
+
+        // Draw map function icons (banks, shops, quest NPCs, etc.)
+        for (let i = 0; i < this.activeMapFunctionCount; i++) {
+            const icon = this.activeMapFunctions[i];
+            if (!icon) continue;
+
+            // Convert Pix32 sprite to canvas (cached)
+            let iconCanvas = this.bootMapIconCache.get(icon);
+            if (!iconCanvas) {
+                iconCanvas = document.createElement('canvas');
+                iconCanvas.width = icon.wi;
+                iconCanvas.height = icon.hi;
+                const ictx = iconCanvas.getContext('2d')!;
+                const idata = ictx.createImageData(icon.wi, icon.hi);
+                const dst = idata.data;
+                const src = icon.data;
+                for (let p = 0; p < src.length; p++) {
+                    const rgb = src[p];
+                    dst[p * 4] = (rgb >> 16) & 0xff;
+                    dst[p * 4 + 1] = (rgb >> 8) & 0xff;
+                    dst[p * 4 + 2] = rgb & 0xff;
+                    dst[p * 4 + 3] = rgb === 0 ? 0 : 255;
+                }
+                ictx.putImageData(idata, 0, 0);
+                this.bootMapIconCache.set(icon, iconCanvas);
+            }
+
+            const tx = this.activeMapFunctionX[i];
+            const tz = this.activeMapFunctionZ[i];
+            const fx = tx * 128 + 64;
+            const fz = tz * 128 + 64;
+            const sx = toScreenX(fx);
+            const sy = toScreenY(fz);
+            const iconScale = Math.max(1, scale * 1.5);
+            const iw = icon.wi * iconScale;
+            const ih = icon.hi * iconScale;
+            canvas2d.drawImage(iconCanvas, sx - iw / 2, sy - ih / 2, iw, ih);
+        }
+
+        // Draw ground items — red dots
+        canvas2d.fillStyle = '#FF0000';
+        for (let tx = 0; tx < 104; tx++) {
+            for (let tz = 0; tz < 104; tz++) {
+                if (this.groundObj[this.minusedlevel]?.[tx]?.[tz]) {
+                    const fx = tx * 128 + 64;
+                    const fz = tz * 128 + 64;
+                    const sx = toScreenX(fx);
+                    const sy = toScreenY(fz);
+                    canvas2d.fillRect(sx - dotSize * 0.5, sy - dotSize * 0.5, dotSize, dotSize);
+                }
+            }
+        }
+
+        // Draw NPCs — yellow dots
+        canvas2d.fillStyle = '#FFFF00';
+        for (let i = 0; i < this.npcCount; i++) {
+            const npc = this.npc[this.npcIds[i]];
+            if (npc && npc.isReady() && npc.type && npc.type.minimap) {
+                const sx = toScreenX(npc.x);
+                const sy = toScreenY(npc.z);
+                canvas2d.fillRect(sx - dotSize * 0.5, sy - dotSize * 0.5, dotSize, dotSize);
+            }
+        }
+
+        // Draw other players — white dots, friends in green
+        for (let i = 0; i < this.playerCount; i++) {
+            const player = this.players[this.playerIds[i]];
+            if (player && player.isReady() && player.name) {
+                let isFriend = false;
+                const userhash = JString.toUserhash(player.name);
+                for (let j = 0; j < this.friendCount; j++) {
+                    if (userhash === this.friendUserhash[j] && this.friendNodeId[j] !== 0) {
+                        isFriend = true;
+                        break;
+                    }
+                }
+                canvas2d.fillStyle = isFriend ? '#00FF00' : '#FFFFFF';
+                const sx = toScreenX(player.x);
+                const sy = toScreenY(player.z);
+                canvas2d.fillRect(sx - dotSize * 0.5, sy - dotSize * 0.5, dotSize, dotSize);
+            }
+        }
+
+        // Draw local player — larger white dot with border
+        const playerSx = toScreenX(this.localPlayer.x);
+        const playerSy = toScreenY(this.localPlayer.z);
+        canvas2d.fillStyle = 'white';
+        canvas2d.fillRect(playerSx - dotSize, playerSy - dotSize, dotSize * 2, dotSize * 2);
+        canvas2d.strokeStyle = 'black';
+        canvas2d.strokeRect(playerSx - dotSize, playerSy - dotSize, dotSize * 2, dotSize * 2);
+
+        // Draw crosshair through player position
+        canvas2d.strokeStyle = 'rgba(255,255,255,0.3)';
+        canvas2d.beginPath();
+        canvas2d.moveTo(playerSx, drawY);
+        canvas2d.lineTo(playerSx, drawY + drawH);
+        canvas2d.moveTo(drawX, playerSy);
+        canvas2d.lineTo(drawX + drawW, playerSy);
+        canvas2d.stroke();
+
+        // Instructions
+        canvas2d.fillStyle = 'white';
+        canvas2d.font = 'bold 14px Arial';
+        canvas2d.textAlign = 'center';
+        canvas2d.fillText('Tap a destination to walk there', cw / 2, 20);
+        canvas2d.fillText('Tap outside map to close', cw / 2, ch - 10);
+    }
+
+    /** BootScape: handle clicks on the fullscreen map overlay. Called during game loop before other input. */
+    private bootMapHandleClick(): void {
+        if (!this.bootMapOpen || this.mouseClickButton !== 1 || !this.localPlayer) {
+            return;
+        }
+
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const scale = Math.min(cw / 512, ch / 512);
+        const drawW = 512 * scale;
+        const drawH = 512 * scale;
+        const drawX = (cw - drawW) / 2;
+        const drawY = (ch - drawH) / 2;
+
+        const clickX = this.mouseClickX;
+        const clickY = this.mouseClickY;
+        this.mouseClickButton = 0; // consume click
+
+        if (clickX >= drawX && clickX <= drawX + drawW && clickY >= drawY && clickY <= drawY + drawH) {
+            // Convert screen click to minimap pixel coordinates (0-511)
+            const mmX = ((clickX - drawX) / scale) | 0;
+            const mmY = ((clickY - drawY) / scale) | 0;
+
+            // Minimap pixel-to-tile mapping (from minimapBuildBuffer):
+            // tileX = (mmX - 48) / 4, tileZ = 103 - (mmY - 48) / 4
+            const tileX = ((mmX - 48) / 4) | 0;
+            const tileZ = (103 - ((mmY - 48) / 4)) | 0;
+
+            // Clamp to valid build area range
+            if (tileX >= 0 && tileX < 104 && tileZ >= 0 && tileZ < 104) {
+                const startX = this.localPlayer.routeX[0];
+                const startZ = this.localPlayer.routeZ[0];
+                this.tryMove(startX, startZ, tileX, tileZ, true, 0, 0, 0, 0, 0, 0);
+            }
+
+            this.bootMapOpen = false;
+        } else {
+            // Clicked outside map — close
+            this.bootMapOpen = false;
         }
     }
 
-    /** BootScape: player stopped walking — halt at server-authoritative tile. */
+    /** BootScape: player started walking IRL — unfreeze on server. */
+    private bootOnWalkStart(): void {
+        this.out.pIsaac(ClientProt.BOOT_RESUME);
+    }
+
+    /** BootScape: player stopped walking IRL — freeze on server. */
     private bootOnWalkStop(): void {
-        // Send BOOT_HALT — zero-byte opcode, no coordinates.
-        // The server calls clearWaypoints() at its own authoritative tile position,
-        // so there is no client/server coordinate mismatch and no rubber-band.
         this.out.pIsaac(ClientProt.BOOT_HALT);
-        this.bootPendingMoveType = -1;
-        this.bootPendingRouteLen = 0;
     }
 
     private drawBootScapeHud(): void {
@@ -4268,15 +4493,24 @@ export class Client extends GameShell {
         if (this.redrawFrame) {
             this.redrawFrame = false;
 
-            this.areaBackleft1?.draw(0, 4);
-            this.areaBackleft2?.draw(0, 357);
-            this.areaBackright1?.draw(722, 4);
-            this.areaBackright2?.draw(743, 205);
-            this.areaBacktop1?.draw(0, 0);
-            this.areaBackvmid1?.draw(516, 4);
-            this.areaBackvmid2?.draw(516, 205);
-            this.areaBackvmid3?.draw(496, 357);
-            this.areaBackhmid2?.draw(0, 338);
+            if (this.bootHideUi) {
+                // Clear entire canvas to black when UI is hidden
+                this.drawArea?.setPixels();
+                Pix2D.fillRect(0, 0, this.sWid, this.sHei, 0);
+                this.drawArea?.draw(0, 0);
+            }
+
+            if (!this.bootHideUi) {
+                this.areaBackleft1?.draw(0, 4);
+                this.areaBackleft2?.draw(0, 357);
+                this.areaBackright1?.draw(722, 4);
+                this.areaBackright2?.draw(743, 205);
+                this.areaBacktop1?.draw(0, 0);
+                this.areaBackvmid1?.draw(516, 4);
+                this.areaBackvmid2?.draw(516, 205);
+                this.areaBackvmid3?.draw(496, 357);
+                this.areaBackhmid2?.draw(0, 338);
+            }
 
             this.redrawSidebar = true;
             this.redrawChatback = true;
@@ -4285,11 +4519,15 @@ export class Client extends GameShell {
 
             if (this.sceneState !== 2) {
                 this.areaViewport?.draw(4, 4);
-                this.areaMapback?.draw(550, 4);
+                if (!this.bootHideUi) this.areaMapback?.draw(550, 4);
             }
         }
 
         if (this.sceneState === 2) {
+            if (this.bootHideUi) {
+                // Ensure viewport is the active draw target when UI drawing is skipped
+                this.areaViewport?.setPixels();
+            }
             this.gameDrawMain();
         }
 
@@ -4313,7 +4551,7 @@ export class Client extends GameShell {
         }
 
         if (this.redrawSidebar) {
-            this.drawSidebar();
+            if (!this.bootHideUi) this.drawSidebar();
             this.redrawSidebar = false;
         }
 
@@ -4363,11 +4601,11 @@ export class Client extends GameShell {
         }
 
         if (this.redrawChatback) {
-            this.drawChat();
+            if (!this.bootHideUi) this.drawChat();
             this.redrawChatback = false;
         }
 
-        if (this.sceneState === 2) {
+        if (this.sceneState === 2 && !this.bootHideUi) {
             this.minimapDraw();
             this.areaMapback?.draw(550, 4);
         }
@@ -4376,7 +4614,7 @@ export class Client extends GameShell {
             this.redrawSideicons = true;
         }
 
-        if (this.redrawSideicons) {
+        if (this.redrawSideicons && !this.bootHideUi) {
             if (this.tutFlashingTab !== -1 && this.tutFlashingTab === this.sideTab) {
                 this.tutFlashingTab = -1;
                 this.out.pIsaac(ClientProt.TUT_CLICKSIDE);
@@ -4489,7 +4727,7 @@ export class Client extends GameShell {
             this.areaViewport?.setPixels();
         }
 
-        if (this.redrawPrivacySettings) {
+        if (this.redrawPrivacySettings && !this.bootHideUi) {
             this.redrawPrivacySettings = false;
 
             this.areaBackbase1?.setPixels();
@@ -4610,8 +4848,10 @@ export class Client extends GameShell {
         const cycle = Pix3D.cycle;
         Model.mouseCheck = true;
         Model.pickedCount = 0;
-        Model.mouseX = this.mouseX - 4;
-        Model.mouseY = this.mouseY - 4;
+        const vpX = this.bootExpandedViewport ? 0 : 4;
+        const vpY = this.bootExpandedViewport ? 0 : 4;
+        Model.mouseX = this.mouseX - vpX;
+        Model.mouseY = this.mouseY - vpY;
 
         Pix2D.cls();
         this.world?.renderAll(this.camX, this.camY, this.camZ, level, this.camYaw, this.camPitch, this.loopCycle);
@@ -4620,7 +4860,7 @@ export class Client extends GameShell {
         this.coordArrow();
         this.textureRunAnims(cycle);
         this.otherOverlays();
-        this.areaViewport?.draw(4, 4);
+        this.areaViewport?.draw(vpX, vpY);
 
         this.camX = camX;
         this.camY = camY;
@@ -6197,20 +6437,6 @@ export class Client extends GameShell {
             next = this.dirMap[CollisionMap.index(x, z)];
         }
 
-        if (!AccelerometerGate.isMoving()) {
-            // BootScape: queue the destination — send it when the player starts walking
-            if (length > 0) {
-                this.bootPendingMoveType = type;
-                this.bootPendingRouteLen = Math.min(length, 25);
-                this.bootPendingCtrl = this.keyHeld[5] === 1 ? 1 : 0;
-                for (let i = 0; i < this.bootPendingRouteLen; i++) {
-                    this.bootPendingRouteX[i] = this.routeX[i];
-                    this.bootPendingRouteZ[i] = this.routeZ[i];
-                }
-            }
-            return false;
-        }
-
         if (length > 0) {
             bufferSize = Math.min(length, 25); // max number of turns in a single pf request
             length--;
@@ -7332,6 +7558,8 @@ export class Client extends GameShell {
                     this.minimapFlagX -= dx;
                     this.minimapFlagZ -= dz;
                 }
+
+
 
                 this.cinemaCam = false;
 
@@ -8840,18 +9068,24 @@ export class Client extends GameShell {
         let y: number;
 
         // the main viewport area
-        if (this.mouseClickX > 4 && this.mouseClickY > 4 && this.mouseClickX < 516 && this.mouseClickY < 338) {
-            x = this.mouseClickX - ((width / 2) | 0) - 4;
-            if (x + width > 512) {
-                x = 512 - width;
+        const vpRight = this.bootExpandedViewport ? this.sWid : 516;
+        const vpBottom = this.bootExpandedViewport ? this.sHei : 338;
+        const vpOffX = this.bootExpandedViewport ? 0 : 4;
+        const vpOffY = this.bootExpandedViewport ? 0 : 4;
+        const vpW = vpRight - vpOffX;
+        const vpH = vpBottom - vpOffY;
+        if (this.mouseClickX > vpOffX && this.mouseClickY > vpOffY && this.mouseClickX < vpRight && this.mouseClickY < vpBottom) {
+            x = this.mouseClickX - ((width / 2) | 0) - vpOffX;
+            if (x + width > vpW) {
+                x = vpW - width;
             }
             if (x < 0) {
                 x = 0;
             }
 
-            y = this.mouseClickY - 4;
-            if (y + height > 334) {
-                y = 334 - height;
+            y = this.mouseClickY - vpOffY;
+            if (y + height > vpH) {
+                y = vpH - height;
             }
             if (y < 0) {
                 y = 0;
@@ -8866,7 +9100,7 @@ export class Client extends GameShell {
         }
 
         // the sidebar/tabs area
-        if (this.mouseClickX > 553 && this.mouseClickY > 205 && this.mouseClickX < 743 && this.mouseClickY < 466) {
+        if (!this.bootHideUi && this.mouseClickX > 553 && this.mouseClickY > 205 && this.mouseClickX < 743 && this.mouseClickY < 466) {
             x = this.mouseClickX - ((width / 2) | 0) - 553;
             if (x < 0) {
                 x = 0;
@@ -8890,7 +9124,7 @@ export class Client extends GameShell {
         }
 
         // the chatbox area
-        if (this.mouseClickX > 17 && this.mouseClickY > 357 && this.mouseClickX < 496 && this.mouseClickY < 453) {
+        if (!this.bootHideUi && this.mouseClickX > 17 && this.mouseClickY > 357 && this.mouseClickX < 496 && this.mouseClickY < 453) {
             x = this.mouseClickX - ((width / 2) | 0) - 17;
             if (x < 0) {
                 x = 0;
@@ -9597,10 +9831,12 @@ export class Client extends GameShell {
         }
 
         if (action === MiniMenuAction.WALK) {
+            const walkOffX = this.bootExpandedViewport ? 0 : 4;
+            const walkOffY = this.bootExpandedViewport ? 0 : 4;
             if (this.isMenuOpen) {
-                this.world?.updateMousePicking(b - 4, c - 4);
+                this.world?.updateMousePicking(b - walkOffX, c - walkOffY);
             } else {
-                this.world?.updateMousePicking(this.mouseClickX - 4, this.mouseClickY - 4);
+                this.world?.updateMousePicking(this.mouseClickX - walkOffX, this.mouseClickY - walkOffY);
             }
         }
 

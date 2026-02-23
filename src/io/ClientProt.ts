@@ -95,4 +95,5 @@ export const enum ClientProt {
     MOVE_GAMECLICK = 6, // index: 255 - NXT naming
 
     BOOT_HALT = 250, // BootScape: halt movement at server-authoritative tile (zero-byte payload)
+    BOOT_RESUME = 251, // BootScape: resume movement (clear delay)
 };

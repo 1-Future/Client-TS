@@ -11,7 +11,7 @@ const SAMPLE_INTERVAL_MS = 100; // enforce 10 Hz regardless of sensor fire rate
 const WINDOW_SIZE = 20;         // ~2 seconds at 10 Hz
 const MOVEMENT_THRESHOLD = 4.0; // m/s² — high enough to ignore hand tremor/micro-vibration
 const START_DEBOUNCE = 3;       // consecutive above-threshold samples before onStart fires (~0.3s)
-const STOP_DEBOUNCE = 10;       // consecutive below-threshold samples before onStop fires (~1s)
+const STOP_DEBOUNCE = 50;       // consecutive below-threshold samples before onStop fires (~5s)
 
 class AccelerometerGateImpl {
     private samples: number[] = [];
